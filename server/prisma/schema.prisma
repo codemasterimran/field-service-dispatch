@@ -1,0 +1,130 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  DISPATCHER
+  TECHNICIAN
+}
+
+enum JobStatus {
+  UNASSIGNED
+  ASSIGNED
+  EN_ROUTE
+  ON_SITE
+  COMPLETED
+}
+
+enum EventType {
+  STATUS_CHANGE
+  ASSIGNED
+  UNASSIGNED
+  NOTE
+  COMPLETION
+  PART_ADDED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  name         String
+  createdAt    DateTime @default(now())
+
+  // Relations
+  assignments      JobAssignment[]
+  partsRecorded    PartUsed[]
+  jobEvents        JobEvent[]
+  alertDismissals  AlertDismissal[]
+}
+
+model Job {
+  id                       String    @id @default(cuid())
+  customerName             String
+  siteAddress              String
+  description              String
+  priority                 Int       @default(2) // 1=High, 2=Medium, 3=Low
+  scheduledDate            DateTime  @db.Date
+  startTime                String    // "HH:MM" 24hr format stored as string
+  estimatedDurationMinutes Int
+  status                   JobStatus @default(UNASSIGNED)
+  completionNote           String?
+  archivedAt               DateTime?
+  createdAt                DateTime  @default(now())
+
+  // Relations
+  assignments     JobAssignment[]
+  partsUsed       PartUsed[]
+  events          JobEvent[]
+  alertDismissals AlertDismissal[]
+}
+
+model JobAssignment {
+  id           String    @id @default(cuid())
+  jobId        String
+  technicianId String
+  assignedAt   DateTime  @default(now())
+  unassignedAt DateTime?
+
+  // Relations
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  technician User @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([technicianId])
+}
+
+model PartUsed {
+  id           String   @id @default(cuid())
+  jobId        String
+  partName     String
+  quantity     Int
+  recordedById String
+  createdAt    DateTime @default(now())
+
+  // Relations
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  recordedBy User @relation(fields: [recordedById], references: [id])
+
+  @@index([jobId])
+}
+
+model JobEvent {
+  id        String    @id @default(cuid())
+  jobId     String
+  type      EventType
+  oldValue  String?
+  newValue  String?
+  actorId   String
+  createdAt DateTime  @default(now())
+
+  // Relations - NO update/delete operations ever written against this table
+  job   Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  actor User @relation(fields: [actorId], references: [id])
+
+  @@index([jobId])
+  @@index([createdAt])
+}
+
+model AlertDismissal {
+  id             String   @id @default(cuid())
+  jobId          String
+  dismissedAt    DateTime @default(now())
+  dismissedById  String
+  windowSnapshot String   // JSON: {scheduledDate, startTime, estimatedDurationMinutes}
+
+  // Relations
+  job           Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  dismissedBy   User @relation(fields: [dismissedById], references: [id])
+
+  @@index([jobId])
+}
