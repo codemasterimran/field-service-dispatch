@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { StatusBadge, PriorityBadge } from '../components/Badges';
 import JobForm from '../components/JobForm';
 import AssignPanel from '../components/AssignPanel';
+import StatusTransitionPanel from '../components/StatusTransitionPanel';
+import AddPartForm from '../components/AddPartForm';
 import { jobsApi } from '../api/jobs';
-import { Job, JobEvent, JobStatus, Assignment } from '../types';
+import { Job, JobEvent, JobStatus, Assignment, PartUsed } from '../types';
 import { useAuth } from '../auth/AuthContext';
 
 const EVENT_LABELS: Record<string, string> = {
@@ -105,6 +107,11 @@ export default function JobDetail() {
 
   const activeAssignments = job.assignments?.filter(a => !a.unassignedAt) ?? [];
 
+  // Technician can transition if they are actively assigned AND job is not completed/archived
+  const isAssignedTech = user?.role === 'TECHNICIAN' &&
+    activeAssignments.some(a => a.technicianId === user.id);
+  const canTransition = isAssignedTech && job.status !== 'COMPLETED' && !job.archivedAt;
+
   return (
     <Layout>
       {/* Back + actions */}
@@ -152,6 +159,14 @@ export default function JobDetail() {
             )}
           </div>
 
+          {/* Status transition */}
+          <StatusTransitionPanel
+            jobId={job.id}
+            currentStatus={job.status as JobStatus}
+            canTransition={canTransition}
+            onStatusChanged={fetchJob}
+          />
+
           {/* Schedule */}
           <div className="card p-4">
             <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Schedule</h2>
@@ -197,6 +212,18 @@ export default function JobDetail() {
               </table>
             ) : (
               <p className="text-xs text-slate-400">No parts recorded yet</p>
+            )}
+            {/* Technicians on an active job can add parts */}
+            {isAssignedTech && ['EN_ROUTE', 'ON_SITE'].includes(job.status) && (
+              <AddPartForm
+                jobId={job.id}
+                onAdded={(part: PartUsed) => {
+                  setJob(prev => prev ? {
+                    ...prev,
+                    partsUsed: [...(prev.partsUsed ?? []), part],
+                  } : prev);
+                }}
+              />
             )}
           </div>
 
