@@ -7,6 +7,7 @@ import JobForm from '../components/JobForm';
 import BulkAssignModal from '../components/BulkAssignModal';
 import { jobsApi, JobFilters } from '../api/jobs';
 import { Job, JobStatus } from '../types';
+import { usePolling } from '../hooks/usePolling';
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: 'All statuses' },
@@ -58,6 +59,9 @@ export default function JobList() {
   }, [page, sortBy, sortDir, search, status, date, archived]);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  // Auto-refresh every 30s — dispatcher sees live status updates
+  usePolling(fetchJobs, 30_000);
 
   // Reset to page 1 when filters change
   useEffect(() => { setPage(1); }, [search, status, date, archived]);

@@ -4,6 +4,7 @@ import Layout from '../components/Layout';
 import { StatusBadge, PriorityBadge } from '../components/Badges';
 import { jobsApi } from '../api/jobs';
 import { Job, JobStatus } from '../types';
+import { usePolling } from '../hooks/usePolling';
 
 export default function MyJobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -29,6 +30,9 @@ export default function MyJobs() {
   }, [statusFilter]);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  // Auto-refresh every 30s — technician sees status updates
+  usePolling(fetchJobs, 30_000);
 
   const formatDate = (d: string) =>
     new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });

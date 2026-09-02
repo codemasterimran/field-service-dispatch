@@ -1,14 +1,11 @@
-import { ReactNode, useState, useEffect } from 'react';
+import { ReactNode } from 'react';
 import Nav from './Nav';
+import { useAuth } from '../auth/AuthContext';
+import { useAlertCount } from '../hooks/usePolling';
 
 export default function Layout({ children }: { children: ReactNode }) {
-  const [alertCount, setAlertCount] = useState(0);
-
-  // Poll alert count every 60s — replaced with real fetch in Phase 9
-  useEffect(() => {
-    // placeholder — Phase 9 will wire this up
-    setAlertCount(0);
-  }, []);
+  const { user } = useAuth();
+  const alertCount = useAlertCount(user?.role === 'DISPATCHER');
 
   return (
     <div className="min-h-screen bg-cream-50">
