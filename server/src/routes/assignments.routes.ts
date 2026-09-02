@@ -45,28 +45,25 @@ async function getTechnicianWindows(technicianId: string, excludeJobId?: string)
 // ─── POST /assignments/:jobId/assign ─────────────────────────────────────────
 router.post('/:jobId/assign', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
-    const { technicianId } = req.body;
+    const jobId = req.params.jobId as string;
+    const { technicianId } = req.body as { technicianId: string };
 
     if (!technicianId) {
       res.status(400).json({ error: 'technicianId is required' });
       return;
     }
 
-    // Verify job exists
     const job = await prisma.job.findUnique({ where: { id: jobId } });
     if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
     if (job.archivedAt) { res.status(400).json({ error: 'Cannot assign to an archived job' }); return; }
     if (job.status === 'COMPLETED') { res.status(400).json({ error: 'Cannot assign to a completed job' }); return; }
 
-    // Verify technician exists and is a technician
     const tech = await prisma.user.findUnique({ where: { id: technicianId } });
     if (!tech || tech.role !== 'TECHNICIAN') {
       res.status(404).json({ error: 'Technician not found' });
       return;
     }
 
-    // Check already assigned
     const alreadyAssigned = await prisma.jobAssignment.findFirst({
       where: { jobId, technicianId, unassignedAt: null },
     });
@@ -90,7 +87,6 @@ router.post('/:jobId/assign', requireRole('DISPATCHER'), async (req: Request, re
       return;
     }
 
-    // Create assignment + update job status if UNASSIGNED
     const [assignment] = await prisma.$transaction([
       prisma.jobAssignment.create({ data: { jobId, technicianId } }),
       ...(job.status === 'UNASSIGNED'
@@ -98,10 +94,9 @@ router.post('/:jobId/assign', requireRole('DISPATCHER'), async (req: Request, re
         : []),
     ]);
 
-    // Log events
-    await writeEvent({ jobId, type: 'ASSIGNED', oldValue: null, newValue: tech.name, actorId: req.user!.id });
+    await writeEvent({ jobId, type: 'ASSIGNED', oldValue: null, newValue: tech.name, actorId: req.user!.id as string });
     if (job.status === 'UNASSIGNED') {
-      await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'UNASSIGNED', newValue: 'ASSIGNED', actorId: req.user!.id });
+      await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'UNASSIGNED', newValue: 'ASSIGNED', actorId: req.user!.id as string });
     }
 
     res.status(201).json({ assignment, message: `${tech.name} assigned successfully` });
@@ -114,11 +109,11 @@ router.post('/:jobId/assign', requireRole('DISPATCHER'), async (req: Request, re
 // ─── DELETE /assignments/:jobId/assign/:technicianId ─────────────────────────
 router.delete('/:jobId/assign/:technicianId', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const { jobId, technicianId } = req.params;
+    const jobId = req.params.jobId as string;
+    const technicianId = req.params.technicianId as string;
 
     const assignment = await prisma.jobAssignment.findFirst({
       where: { jobId, technicianId, unassignedAt: null },
-      include: { technician: true },
     });
 
     if (!assignment) {
@@ -126,13 +121,14 @@ router.delete('/:jobId/assign/:technicianId', requireRole('DISPATCHER'), async (
       return;
     }
 
-    // Mark as unassigned (soft delete — preserves history)
+    const tech = await prisma.user.findUnique({ where: { id: technicianId }, select: { name: true } });
+    const techName = tech?.name ?? technicianId;
+
     await prisma.jobAssignment.update({
       where: { id: assignment.id },
       data: { unassignedAt: new Date() },
     });
 
-    // If no more active assignments, move job back to UNASSIGNED
     const remainingAssignments = await prisma.jobAssignment.count({
       where: { jobId, unassignedAt: null },
     });
@@ -140,17 +136,17 @@ router.delete('/:jobId/assign/:technicianId', requireRole('DISPATCHER'), async (
     const job = await prisma.job.findUnique({ where: { id: jobId } });
     if (remainingAssignments === 0 && job?.status === 'ASSIGNED') {
       await prisma.job.update({ where: { id: jobId }, data: { status: 'UNASSIGNED' } });
-      await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'ASSIGNED', newValue: 'UNASSIGNED', actorId: req.user!.id });
+      await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'ASSIGNED', newValue: 'UNASSIGNED', actorId: req.user!.id as string });
     }
 
     await writeEvent({
       jobId, type: 'UNASSIGNED',
-      oldValue: assignment.technician.name,
+      oldValue: techName,
       newValue: null,
-      actorId: req.user!.id,
+      actorId: req.user!.id as string,
     });
 
-    res.json({ message: `${assignment.technician.name} unassigned successfully` });
+    res.json({ message: `${techName} unassigned successfully` });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
@@ -158,11 +154,9 @@ router.delete('/:jobId/assign/:technicianId', requireRole('DISPATCHER'), async (
 });
 
 // ─── POST /assignments/bulk-assign ───────────────────────────────────────────
-// Body: { technicianId: string, jobIds: string[] }
-// Returns per-job result — never fails the whole batch for one conflict
 router.post('/bulk-assign', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const { technicianId, jobIds } = req.body;
+    const { technicianId, jobIds } = req.body as { technicianId: string; jobIds: string[] };
 
     if (!technicianId || !Array.isArray(jobIds) || jobIds.length === 0) {
       res.status(400).json({ error: 'technicianId and jobIds[] are required' });
@@ -177,7 +171,6 @@ router.post('/bulk-assign', requireRole('DISPATCHER'), async (req: Request, res:
 
     const results: { jobId: string; success: boolean; reason?: string }[] = [];
 
-    // Process each job independently
     for (const jobId of jobIds) {
       try {
         const job = await prisma.job.findUnique({ where: { id: jobId } });
@@ -203,7 +196,6 @@ router.post('/bulk-assign', requireRole('DISPATCHER'), async (req: Request, res:
           continue;
         }
 
-        // Overlap check — include all assignments including ones added in this batch
         const existingWindows = await getTechnicianWindows(technicianId, jobId);
         const conflict = findOverlap(existingWindows, {
           scheduledDate: job.scheduledDate,
@@ -220,7 +212,6 @@ router.post('/bulk-assign', requireRole('DISPATCHER'), async (req: Request, res:
           continue;
         }
 
-        // Assign
         await prisma.$transaction([
           prisma.jobAssignment.create({ data: { jobId, technicianId } }),
           ...(job.status === 'UNASSIGNED'
@@ -228,9 +219,9 @@ router.post('/bulk-assign', requireRole('DISPATCHER'), async (req: Request, res:
             : []),
         ]);
 
-        await writeEvent({ jobId, type: 'ASSIGNED', oldValue: null, newValue: tech.name, actorId: req.user!.id });
+        await writeEvent({ jobId, type: 'ASSIGNED', oldValue: null, newValue: tech.name, actorId: req.user!.id as string });
         if (job.status === 'UNASSIGNED') {
-          await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'UNASSIGNED', newValue: 'ASSIGNED', actorId: req.user!.id });
+          await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'UNASSIGNED', newValue: 'ASSIGNED', actorId: req.user!.id as string });
         }
 
         results.push({ jobId, success: true });

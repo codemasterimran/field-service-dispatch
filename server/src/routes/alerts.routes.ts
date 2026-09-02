@@ -27,15 +27,14 @@ function isJobLate(job: {
 // ─── GET /alerts — late jobs (dispatcher only) ────────────────────────────────
 router.get('/', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    // Fetch all active, non-completed jobs scheduled in the past
     const cutoff = new Date();
-    cutoff.setHours(0, 0, 0, 0); // start of today
+    cutoff.setHours(0, 0, 0, 0);
 
     const candidates = await prisma.job.findMany({
       where: {
         archivedAt: null,
         status: { notIn: ['COMPLETED', 'UNASSIGNED'] },
-        scheduledDate: { lt: cutoff }, // only past dates — avoids false positives for today until we check time
+        scheduledDate: { lt: cutoff },
       },
       include: {
         assignments: {
@@ -46,7 +45,6 @@ router.get('/', requireRole('DISPATCHER'), async (req: Request, res: Response) =
       orderBy: [{ scheduledDate: 'asc' }, { priority: 'asc' }],
     });
 
-    // Also fetch today's jobs that have gone past their window
     const todayCandidates = await prisma.job.findMany({
       where: {
         archivedAt: null,
@@ -66,9 +64,8 @@ router.get('/', requireRole('DISPATCHER'), async (req: Request, res: Response) =
 
     const allCandidates = [...candidates, ...todayCandidates.filter(j => isJobLate(j))];
 
-    // Fetch dismissed alerts for this dispatcher
     const dismissed = await prisma.alertDismissal.findMany({
-      where: { dismissedById: req.user!.id },
+      where: { dismissedById: req.user!.id as string },
       select: { jobId: true },
     });
     const dismissedJobIds = new Set(dismissed.map(d => d.jobId));
@@ -90,20 +87,23 @@ router.get('/', requireRole('DISPATCHER'), async (req: Request, res: Response) =
   }
 });
 
-// ─── POST /alerts/:jobId/dismiss — dispatcher dismisses an alert ──────────────
+// ─── POST /alerts/:jobId/dismiss ─────────────────────────────────────────────
 router.post('/:jobId/dismiss', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
+    const jobId = req.params.jobId as string;
+    const dismissedById = req.user!.id as string;
 
     const job = await prisma.job.findUnique({ where: { id: jobId } });
     if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
 
-    // Upsert — idempotent
-    await prisma.alertDismissal.upsert({
-      where: { jobId_dismissedById: { jobId, dismissedById: req.user!.id } },
-      create: { jobId, dismissedById: req.user!.id },
-      update: {},
+    // Check if already dismissed first, then create
+    const existing = await prisma.alertDismissal.findFirst({
+      where: { jobId, dismissedById },
     });
+
+    if (!existing) {
+      await prisma.alertDismissal.create({ data: { jobId, dismissedById } });
+    }
 
     res.json({ message: 'Alert dismissed' });
   } catch (err) {
@@ -115,9 +115,11 @@ router.post('/:jobId/dismiss', requireRole('DISPATCHER'), async (req: Request, r
 // ─── DELETE /alerts/:jobId/dismiss — un-dismiss ───────────────────────────────
 router.delete('/:jobId/dismiss', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
+    const jobId = req.params.jobId as string;
+    const dismissedById = req.user!.id as string;
+
     await prisma.alertDismissal.deleteMany({
-      where: { jobId, dismissedById: req.user!.id },
+      where: { jobId, dismissedById },
     });
     res.json({ message: 'Alert restored' });
   } catch (err) {

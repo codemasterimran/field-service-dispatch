@@ -6,11 +6,10 @@ import { writeEvent } from '../services/timeline.service';
 const router = Router();
 router.use(authenticate);
 
-// ─── POST /parts/:jobId — technician records a part used ─────────────────────
 router.post('/:jobId', async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
-    const { partName, quantity } = req.body;
+    const jobId = req.params.jobId as string;
+    const { partName, quantity } = req.body as { partName?: string; quantity?: number };
 
     if (!partName?.trim()) {
       res.status(400).json({ error: 'partName is required' });
@@ -26,11 +25,12 @@ router.post('/:jobId', async (req: Request, res: Response) => {
     const job = await prisma.job.findUnique({ where: { id: jobId } });
     if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
 
-    // Technicians can only add parts to their own jobs
     const user = req.user!;
+    const actorId = user.id as string;
+
     if (user.role === 'TECHNICIAN') {
       const assignment = await prisma.jobAssignment.findFirst({
-        where: { jobId, technicianId: user.id, unassignedAt: null },
+        where: { jobId, technicianId: actorId, unassignedAt: null },
       });
       if (!assignment) {
         res.status(403).json({ error: 'You are not assigned to this job' });
@@ -38,9 +38,8 @@ router.post('/:jobId', async (req: Request, res: Response) => {
       }
     }
 
-    // Jobs must be in an active state to add parts
     if (job.status === 'UNASSIGNED' || job.status === 'ASSIGNED') {
-      res.status(400).json({ error: 'Parts can only be added once a technician is on-site or en-route' });
+      res.status(400).json({ error: 'Parts can only be added once a technician is en-route or on-site' });
       return;
     }
 
@@ -49,7 +48,7 @@ router.post('/:jobId', async (req: Request, res: Response) => {
         jobId,
         partName: partName.trim(),
         quantity: qty,
-        recordedById: user.id,
+        recordedById: actorId,
       },
       include: { recordedBy: { select: { id: true, name: true, role: true } } },
     });
@@ -59,7 +58,7 @@ router.post('/:jobId', async (req: Request, res: Response) => {
       type: 'PART_ADDED',
       oldValue: null,
       newValue: `${qty}× ${partName.trim()}`,
-      actorId: user.id,
+      actorId,
     });
 
     res.status(201).json({ part });

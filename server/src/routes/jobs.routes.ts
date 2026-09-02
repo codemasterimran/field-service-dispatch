@@ -40,7 +40,7 @@ router.post('/', requireRole('DISPATCHER'), async (req: Request, res: Response) 
       type: 'STATUS_CHANGE',
       oldValue: null,
       newValue: 'UNASSIGNED',
-      actorId: req.user!.id,
+      actorId: req.user!.id as string,
     });
 
     res.status(201).json({ job });
@@ -72,7 +72,7 @@ router.get('/', async (req: Request, res: Response) => {
     if (user.role === 'TECHNICIAN') {
       where.assignments = {
         some: {
-          technicianId: user.id,
+          technicianId: user.id as string,
           unassignedAt: null,
         },
       };
@@ -144,7 +144,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const job = await prisma.job.findUnique({
-      where: { id: req.params.id },
+      where: { id: req.params.id as string },
       include: {
         assignments: {
           include: { technician: { select: { id: true, name: true, email: true, role: true } } },
@@ -183,6 +183,44 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /jobs/:id/timeline — audit trail ─────────────────────────────────────
+router.get('/:id/timeline', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const jobId = req.params.id as string;
+
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        assignments: { where: { unassignedAt: null } },
+      },
+    });
+    if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
+
+    // Technicians can only access timelines for their own assigned jobs
+    if (user.role === 'TECHNICIAN') {
+      const isAssigned = job.assignments.some(
+        a => a.technicianId === (user.id as string) && !a.unassignedAt
+      );
+      if (!isAssigned) {
+        res.status(403).json({ error: 'You are not assigned to this job' });
+        return;
+      }
+    }
+
+    const events = await prisma.jobEvent.findMany({
+      where: { jobId },
+      include: { actor: { select: { id: true, name: true, role: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.json({ events, count: events.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ─── PATCH /jobs/:id — edit details (dispatcher only, NOT assignments) ────────
 router.patch('/:id', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
@@ -209,14 +247,14 @@ router.patch('/:id', requireRole('DISPATCHER'), async (req: Request, res: Respon
       return;
     }
 
-    const existing = await prisma.job.findUnique({ where: { id: req.params.id } });
+    const existing = await prisma.job.findUnique({ where: { id: req.params.id as string } });
     if (!existing) {
       res.status(404).json({ error: 'Job not found' });
       return;
     }
 
     const job = await prisma.job.update({
-      where: { id: req.params.id },
+      where: { id: req.params.id as string },
       data,
     });
 
@@ -225,7 +263,7 @@ router.patch('/:id', requireRole('DISPATCHER'), async (req: Request, res: Respon
       type: 'NOTE',
       oldValue: null,
       newValue: `Job details updated by ${req.user!.name}`,
-      actorId: req.user!.id,
+      actorId: req.user!.id as string,
     });
 
     res.json({ job });
@@ -238,19 +276,19 @@ router.patch('/:id', requireRole('DISPATCHER'), async (req: Request, res: Respon
 // ─── PATCH /jobs/:id/archive ──────────────────────────────────────────────────
 router.patch('/:id/archive', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const job = await prisma.job.findUnique({ where: { id: req.params.id } });
+    const job = await prisma.job.findUnique({ where: { id: req.params.id as string } });
     if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
     if (job.archivedAt) { res.status(400).json({ error: 'Job is already archived' }); return; }
 
     const updated = await prisma.job.update({
-      where: { id: req.params.id },
+      where: { id: req.params.id as string },
       data: { archivedAt: new Date() },
     });
 
     await writeEvent({
       jobId: job.id, type: 'NOTE',
       oldValue: null, newValue: 'Job archived',
-      actorId: req.user!.id,
+      actorId: req.user!.id as string,
     });
 
     res.json({ job: updated });
@@ -263,19 +301,19 @@ router.patch('/:id/archive', requireRole('DISPATCHER'), async (req: Request, res
 // ─── PATCH /jobs/:id/restore ──────────────────────────────────────────────────
 router.patch('/:id/restore', requireRole('DISPATCHER'), async (req: Request, res: Response) => {
   try {
-    const job = await prisma.job.findUnique({ where: { id: req.params.id } });
+    const job = await prisma.job.findUnique({ where: { id: req.params.id as string } });
     if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
     if (!job.archivedAt) { res.status(400).json({ error: 'Job is not archived' }); return; }
 
     const updated = await prisma.job.update({
-      where: { id: req.params.id },
+      where: { id: req.params.id as string },
       data: { archivedAt: null },
     });
 
     await writeEvent({
       jobId: job.id, type: 'NOTE',
       oldValue: null, newValue: 'Job restored from archive',
-      actorId: req.user!.id,
+      actorId: req.user!.id as string,
     });
 
     res.json({ job: updated });

@@ -120,7 +120,7 @@ model AlertDismissal {
   jobId          String
   dismissedAt    DateTime @default(now())
   dismissedById  String
-  windowSnapshot String   // JSON: {scheduledDate, startTime, estimatedDurationMinutes}
+  windowSnapshot String?  // JSON: {scheduledDate, startTime, estimatedDurationMinutes} - optional
 
   // Relations
   job           Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)

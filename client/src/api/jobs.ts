@@ -1,5 +1,5 @@
 import { api } from './client';
-import { Job, PaginatedResponse } from '../types';
+import { Job, JobEvent, PaginatedResponse } from '../types';
 
 export interface JobFilters {
   search?: string;
@@ -40,4 +40,7 @@ export const jobsApi = {
   archive: (id: string) => api.patch<{ job: Job }>(`/jobs/${id}/archive`),
 
   restore: (id: string) => api.patch<{ job: Job }>(`/jobs/${id}/restore`),
+
+  timeline: (id: string) =>
+    api.get<{ events: JobEvent[]; count: number }>(`/jobs/${id}/timeline`),
 };

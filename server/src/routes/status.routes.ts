@@ -7,19 +7,17 @@ import { JobStatus } from '@prisma/client';
 const router = Router();
 router.use(authenticate);
 
-// ─── Valid transitions by current status ─────────────────────────────────────
 const ALLOWED_TRANSITIONS: Record<JobStatus, JobStatus[]> = {
-  UNASSIGNED: [],                       // must be assigned first
+  UNASSIGNED: [],
   ASSIGNED:   ['EN_ROUTE'],
   EN_ROUTE:   ['ON_SITE'],
   ON_SITE:    ['COMPLETED'],
-  COMPLETED:  [],                       // terminal state
+  COMPLETED:  [],
 };
 
-// ─── PATCH /status/:jobId — technician advances status ───────────────────────
 router.patch('/:jobId', authenticate, async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
+    const jobId = req.params.jobId as string;
     const { status, completionNote } = req.body as {
       status: JobStatus;
       completionNote?: string;
@@ -34,11 +32,12 @@ router.patch('/:jobId', authenticate, async (req: Request, res: Response) => {
     if (!job) { res.status(404).json({ error: 'Job not found' }); return; }
     if (job.archivedAt) { res.status(400).json({ error: 'Cannot update status of archived job' }); return; }
 
-    // Role check — technicians can only update their own jobs
     const user = req.user!;
+    const actorId = user.id as string;
+
     if (user.role === 'TECHNICIAN') {
       const assignment = await prisma.jobAssignment.findFirst({
-        where: { jobId, technicianId: user.id, unassignedAt: null },
+        where: { jobId, technicianId: actorId, unassignedAt: null },
       });
       if (!assignment) {
         res.status(403).json({ error: 'You are not assigned to this job' });
@@ -46,7 +45,6 @@ router.patch('/:jobId', authenticate, async (req: Request, res: Response) => {
       }
     }
 
-    // State machine validation
     const allowed = ALLOWED_TRANSITIONS[job.status];
     if (!allowed.includes(status)) {
       res.status(422).json({
@@ -55,7 +53,6 @@ router.patch('/:jobId', authenticate, async (req: Request, res: Response) => {
       return;
     }
 
-    // Completion requires a note
     if (status === 'COMPLETED' && !completionNote?.trim()) {
       res.status(400).json({ error: 'completionNote is required when marking a job as COMPLETED' });
       return;
@@ -69,13 +66,12 @@ router.patch('/:jobId', authenticate, async (req: Request, res: Response) => {
       data: updateData,
     });
 
-    // Record timeline event
     await writeEvent({
       jobId,
       type: status === 'COMPLETED' ? 'COMPLETION' : 'STATUS_CHANGE',
       oldValue: job.status,
       newValue: status,
-      actorId: user.id,
+      actorId,
     });
 
     if (status === 'COMPLETED' && completionNote?.trim()) {
@@ -84,7 +80,7 @@ router.patch('/:jobId', authenticate, async (req: Request, res: Response) => {
         type: 'NOTE',
         oldValue: null,
         newValue: completionNote.trim(),
-        actorId: user.id,
+        actorId,
       });
     }
 

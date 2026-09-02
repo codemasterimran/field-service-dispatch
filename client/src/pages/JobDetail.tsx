@@ -51,7 +51,6 @@ function TimelineItem({ event }: { event: JobEvent }) {
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const { user } = useAuth();
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
