@@ -38,8 +38,8 @@ router.post('/:jobId', async (req: Request, res: Response) => {
       }
     }
 
-    if (job.status === 'UNASSIGNED' || job.status === 'ASSIGNED') {
-      res.status(400).json({ error: 'Parts can only be added once a technician is en-route or on-site' });
+    if (job.status === 'COMPLETED') {
+      res.status(400).json({ error: 'Cannot add parts to a completed job' });
       return;
     }
 

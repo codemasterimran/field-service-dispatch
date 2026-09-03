@@ -64,38 +64,96 @@ router.post('/:jobId/assign', requireRole('DISPATCHER'), async (req: Request, re
       return;
     }
 
-    const alreadyAssigned = await prisma.jobAssignment.findFirst({
-      where: { jobId, technicianId, unassignedAt: null },
-    });
-    if (alreadyAssigned) {
-      res.status(409).json({ error: `${tech.name} is already assigned to this job` });
-      return;
-    }
+    // ── Advisory lock + overlap check + insert — all in ONE transaction ──────
+    // pg_advisory_xact_lock(key) acquires a session-level exclusive lock keyed
+    // on hashtext(technicianId). Any concurrent assign for the SAME technician
+    // will block here until the first transaction commits or rolls back.
+    // This closes the check-then-insert race condition entirely.
+    let assignment: { id: string; jobId: string; technicianId: string; assignedAt: Date; unassignedAt: Date | null };
+    let statusChanged = false;
 
-    // Overlap check
-    const existingWindows = await getTechnicianWindows(technicianId, jobId);
-    const conflict = findOverlap(existingWindows, {
-      scheduledDate: job.scheduledDate,
-      startTime: job.startTime,
-      estimatedDurationMinutes: job.estimatedDurationMinutes,
-    });
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        // Acquire per-technician advisory lock — held for the duration of this transaction.
+        // Uses the two-argument int4 overload (namespace=1, key=hashtext(id)::int4).
+        // Any concurrent assign for the SAME technicianId blocks here until we commit/rollback.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(1, hashtext(${technicianId})::int4)`;
 
-    if (conflict) {
-      res.status(409).json({
-        error: `Scheduling conflict: ${tech.name} is already assigned to "${(conflict as { customerName?: string }).customerName ?? 'another job'}" which overlaps this window (${job.startTime}, ${job.estimatedDurationMinutes} min)`,
+        // Re-check duplicate inside the lock
+        const alreadyAssigned = await tx.jobAssignment.findFirst({
+          where: { jobId, technicianId, unassignedAt: null },
+        });
+        if (alreadyAssigned) {
+          throw Object.assign(new Error('DUPLICATE'), { code: 409, msg: `${tech.name} is already assigned to this job` });
+        }
+
+        // Re-fetch technician windows inside the lock
+        const existingAssignments = await tx.jobAssignment.findMany({
+          where: {
+            technicianId,
+            unassignedAt: null,
+            job: {
+              status: { not: 'COMPLETED' },
+              archivedAt: null,
+              id: { not: jobId },
+            },
+          },
+          include: {
+            job: {
+              select: {
+                id: true,
+                customerName: true,
+                scheduledDate: true,
+                startTime: true,
+                estimatedDurationMinutes: true,
+              },
+            },
+          },
+        });
+
+        const windows = existingAssignments.map(a => ({
+          scheduledDate: a.job.scheduledDate,
+          startTime: a.job.startTime,
+          estimatedDurationMinutes: a.job.estimatedDurationMinutes,
+          jobId: a.job.id,
+          customerName: a.job.customerName,
+        }));
+
+        const conflict = findOverlap(windows, {
+          scheduledDate: job.scheduledDate,
+          startTime: job.startTime,
+          estimatedDurationMinutes: job.estimatedDurationMinutes,
+        });
+
+        if (conflict) {
+          throw Object.assign(new Error('CONFLICT'), {
+            code: 409,
+            msg: `Scheduling conflict: ${tech.name} is already assigned to "${(conflict as { customerName?: string }).customerName ?? 'another job'}" which overlaps this window (${job.startTime}, ${job.estimatedDurationMinutes} min)`,
+          });
+        }
+
+        const newAssignment = await tx.jobAssignment.create({ data: { jobId, technicianId } });
+
+        if (job.status === 'UNASSIGNED') {
+          await tx.job.update({ where: { id: jobId }, data: { status: 'ASSIGNED' } });
+        }
+
+        return newAssignment;
       });
-      return;
-    }
 
-    const [assignment] = await prisma.$transaction([
-      prisma.jobAssignment.create({ data: { jobId, technicianId } }),
-      ...(job.status === 'UNASSIGNED'
-        ? [prisma.job.update({ where: { id: jobId }, data: { status: 'ASSIGNED' } })]
-        : []),
-    ]);
+      assignment = result;
+      statusChanged = job.status === 'UNASSIGNED';
+    } catch (err: unknown) {
+      const e = err as { code?: number; msg?: string };
+      if (e.code === 409) {
+        res.status(409).json({ error: e.msg });
+        return;
+      }
+      throw err;
+    }
 
     await writeEvent({ jobId, type: 'ASSIGNED', oldValue: null, newValue: tech.name, actorId: req.user!.id as string });
-    if (job.status === 'UNASSIGNED') {
+    if (statusChanged) {
       await writeEvent({ jobId, type: 'STATUS_CHANGE', oldValue: 'UNASSIGNED', newValue: 'ASSIGNED', actorId: req.user!.id as string });
     }
 

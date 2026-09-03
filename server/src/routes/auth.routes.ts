@@ -1,22 +1,33 @@
 import { Router, Request, Response } from 'express';
-import bcrypt from 'bcryptjs';
+import * as bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { prisma } from '../utils/prisma';
 
 const router = Router();
 
-// POST /auth/register
+// ── Rate limiter: 10 login attempts per 15 minutes per IP ─────────────────────
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts — please try again in 15 minutes' },
+});
+
+// ── POST /auth/register ───────────────────────────────────────────────────────
+// Self-registration is TECHNICIAN only. DISPATCHERs must be created via seed/admin.
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name } = req.body;
 
-    if (!email || !password || !name || !role) {
-      res.status(400).json({ error: 'email, password, name, and role are required' });
+    if (!email || !password || !name) {
+      res.status(400).json({ error: 'email, password, and name are required' });
       return;
     }
 
-    if (!['DISPATCHER', 'TECHNICIAN'].includes(role)) {
-      res.status(400).json({ error: 'role must be DISPATCHER or TECHNICIAN' });
+    if (typeof password !== 'string' || password.length < 8) {
+      res.status(400).json({ error: 'password must be at least 8 characters' });
       return;
     }
 
@@ -28,15 +39,16 @@ router.post('/register', async (req: Request, res: Response) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // Role is always TECHNICIAN — no privilege escalation possible
     const user = await prisma.user.create({
-      data: { email, passwordHash, name, role },
+      data: { email, passwordHash, name, role: 'TECHNICIAN' },
       select: { id: true, email: true, name: true, role: true, createdAt: true },
     });
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: user.name },
       process.env.JWT_SECRET as string,
-      { expiresIn: '7d' }
+      { expiresIn: '8h' }
     );
 
     res.status(201).json({ user, token });
@@ -46,8 +58,8 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 });
 
-// POST /auth/login
-router.post('/login', async (req: Request, res: Response) => {
+// ── POST /auth/login ──────────────────────────────────────────────────────────
+router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -68,10 +80,11 @@ router.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
+    // Re-read role from DB (not from a stale token) so role changes take effect immediately
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: user.name },
       process.env.JWT_SECRET as string,
-      { expiresIn: '7d' }
+      { expiresIn: '8h' }   // reduced from 7d — limits stale-role window
     );
 
     res.json({
@@ -84,7 +97,8 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-// GET /auth/me
+// ── GET /auth/me ──────────────────────────────────────────────────────────────
+// Always re-fetches role from DB — handles mid-session role changes
 router.get('/me', async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
@@ -108,7 +122,7 @@ router.get('/me', async (req: Request, res: Response) => {
   }
 });
 
-// GET /auth/technicians — list all technicians (for dispatcher assign UI)
+// ── GET /auth/technicians ─────────────────────────────────────────────────────
 router.get('/technicians', async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
