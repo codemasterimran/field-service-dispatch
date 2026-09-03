@@ -1,0 +1,21 @@
+{
+  "preset": "ts-jest",
+  "testEnvironment": "node",
+  "roots": ["<rootDir>/src/__tests__"],
+  "testMatch": ["**/*.test.ts"],
+  "moduleFileExtensions": ["ts", "js", "json"],
+  "transform": {
+    "^.+\\.ts$": ["ts-jest", {
+      "tsconfig": {
+        "strict": false,
+        "esModuleInterop": true
+      }
+    }]
+  },
+  "collectCoverageFrom": [
+    "src/services/**/*.ts",
+    "src/middleware/**/*.ts"
+  ],
+  "coverageReporters": ["text", "lcov"],
+  "testTimeout": 10000
+}
