@@ -1,48 +1,55 @@
 # Decisions Log
 
-## 1. Store startTime as a String ("HH:MM"), not a full timestamp
+## 1. startTime stored as a string ("HH:MM"), not a full timestamp
 
-**Chosen:** `startTime String` on the Job model.  
-**Rejected:** `startTime DateTime` (full timestamp including date).
+Chosen: `startTime String` on the Job model.
+Rejected: a full DateTime field.
 
-**Why:** The assignment brief treats scheduled date and start time as independent fields — a dispatcher edits them separately. Storing a full DateTime would require always combining and splitting date+time, which introduces timezone confusion and makes partial updates awkward. Storing "HH:MM" as a string keeps them cleanly separate, and the overlap arithmetic (convert to minutes-since-midnight) is trivial and self-contained.
+Why: date and start time are edited separately by the dispatcher. A single DateTime would mean always splitting and combining date and time, which brings timezone issues. A plain string keeps it simple and the overlap math (convert to minutes) stays easy.
 
-**Trade-off:** No DB-level time ordering on startTime alone. All time comparisons happen in application code. At 100x scale this would need revisiting.
+Trade-off: no database-level sorting by time alone, all comparisons happen in code. Would need to revisit this at much bigger scale.
 
----
+## 2. JobEvent is append-only, enforced in code not the database
 
-## 2. JobEvent is append-only — enforced in application code, not DB constraints
+Chosen: one function, `writeEvent()`, is the only place allowed to insert into JobEvent. No update or delete calls on it anywhere.
+Rejected: database triggers or row-level security.
 
-**Chosen:** Write a single `writeEvent()` helper in `timeline.service.ts` that is the only code path that inserts into JobEvent. No UPDATE or DELETE operations on this table anywhere in the codebase.  
-**Rejected:** DB-level triggers or row-level security to prevent mutations.
+Why: triggers work but add setup on every environment, including Supabase. One write path is easier to check and explain, and the brief asked for an append-only log, not a hard database-level guarantee.
 
-**Why:** PostgreSQL row-level security would work but adds operational complexity (must be set up on every environment including Supabase). A code-level convention — one write path, grep-enforced — is simpler to audit and explain. The brief explicitly calls for an "append-only" audit log, not a cryptographic write-once guarantee, so code convention is sufficient here.
+Trade-off: someone could accidentally add an update later without noticing. Left a note in the code and here as a reminder.
 
-**Trade-off:** A future developer could accidentally add an UPDATE without realising. Mitigated by a comment in the service file and in this decisions log.
+## 3. Explicit join table for jobs and technicians
 
----
+Chosen: a separate `JobAssignment` model with `assignedAt` and `unassignedAt`.
+Rejected: Prisma's built-in many-to-many without an explicit table.
 
-## 3. Many-to-many jobs↔technicians via explicit JobAssignment join table (not implicit Prisma many-to-many)
+Why: we need to know when someone was assigned and when they were removed, for the timeline. The built-in many-to-many doesn't allow extra columns like that.
 
-**Chosen:** Explicit `JobAssignment` model with `assignedAt` and `unassignedAt` fields.  
-**Rejected:** Prisma implicit many-to-many (`@relation` on both sides, no explicit join table).
+## 4. AlertDismissal stores the window as one JSON string
 
-**Why:** We need to record when an assignment was made and when it was removed (for the audit timeline). Prisma's implicit many-to-many gives you a clean join but no room for extra columns. An explicit join table gives us the history we need.
+Chosen: one `windowSnapshot` field storing date, start time, and duration as JSON.
+Rejected: three separate columns for the same data.
 
----
+Why: it's only ever read back as one full snapshot to check if the schedule changed, never queried column by column, so one field is simpler.
 
-## 4. AlertDismissal stores a window snapshot as a JSON string
+## 5. Priority stored as a number, not an enum
 
-**Chosen:** `windowSnapshot String` storing `{scheduledDate, startTime, estimatedDurationMinutes}` as JSON.  
-**Rejected:** Three separate columns (scheduledDate, startTime, durationMinutes) on AlertDismissal.
+Chosen: `priority Int` (1 = High, 2 = Medium, 3 = Low).
+Rejected: an enum like HIGH/MEDIUM/LOW.
 
-**Why:** Keeps the dismissal model lean and self-contained. The snapshot is compared as a whole (has the window changed?) — never queried field-by-field in SQL. JSON string is read once, parsed, compared, done. Three columns would be tidier in a pure relational sense but add no real benefit for this access pattern.
+Why: a number sorts naturally in the database. The label is just a display detail handled on the frontend.
 
----
+## 6. (Reversed) Parts could only be added once a job was En Route or On Site
 
-## 5. Priority stored as Int (1/2/3), not an Enum
+Original: blocked adding parts unless the job was already En Route or On Site.
 
-**Chosen:** `priority Int` (1=High, 2=Medium, 3=Low).  
-**Rejected:** `priority Enum (HIGH|MEDIUM|LOW)`.
+Changed to: parts can be added any time before the job is marked Completed.
 
-**Why:** An integer allows natural sort ordering (ORDER BY priority ASC gives High→Low) without mapping enum values in SQL. The meaning of 1/2/3 is a display concern handled in the frontend. If more priority levels are ever needed, adding them doesn't require a migration to change the enum.
+Why the change: the brief just says parts can be added any time before completion, which is wider than the first version. That first version also had the opposite bug, it never blocked adding parts after completion either. Fixed both at once so the rule matches what was actually asked.
+
+## 7. No hard delete on jobs, only archive and restore
+
+Considered: letting a dispatcher permanently delete a job.
+Rejected in favor of: keeping only archive/restore, which already existed.
+
+Why: deleting a job would either cascade-delete its whole audit trail or leave orphaned event rows pointing at a job that no longer exists. Either way it breaks the append-only timeline requirement, which is one of the core goals. Archive already covers the real need (getting a job out of the active list) without losing any history, so a separate delete path wasn't worth the risk it introduces.

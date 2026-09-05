@@ -1,123 +1,59 @@
-# Submission — Field Service Dispatch
+# Submission
 
 ## Links
 
 - **GitHub repository:** https://github.com/codemasterimran/field-service-dispatch
-- **Live application:** http://localhost:5173 *(local only — see setup below)*
+- **Live application:** https://field-service-dispatch-1.onrender.com
 
 ## Notes for the reviewer
 
-This is a **locally-run** application. It requires Node.js and a running PostgreSQL instance.
-
-**Fastest path to demo:**
-```bash
-# 1 — install deps
-cd server && npm install
-cd ../client && npm install
-
-# 2 — create .env in server/
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/field_service_dispatch"
-JWT_SECRET="your-secret-here"
-CLIENT_URL="http://localhost:5173"
-PORT=3001
-
-# 3 — migrate + seed
-cd server
-npx prisma migrate deploy
-npm run seed
-
-# 4 — start both servers (two terminals)
-npm run dev            # server → :3001
-cd ../client && npm run dev  # client → :5173
-
-# 5 — run tests
-cd server && npm test
-```
-
-The seed creates **8 demo jobs** across every status, 3 technicians, parts, timeline events, and 1 intentionally-late job so the Alerts page shows data immediately.
-
----
+Backend is on Render's free tier, so it sleeps after 15 minutes of no use. First request after that can take 30-60 seconds to respond — that's normal, not a bug. Just wait for the first load.
 
 ## Demo credentials
 
-| Role | Email | Password | Name |
-|------|-------|----------|------|
-| Dispatcher | dispatcher@fieldservice.com | dispatch123 | Sarah Mitchell |
-| Technician | tech1@fieldservice.com | tech123 | James Carter |
-| Technician | tech2@fieldservice.com | tech123 | Priya Sharma |
-| Technician | tech3@fieldservice.com | tech123 | Marcus Webb |
-
----
+| Role | Email | Password |
+|------|-------|----------|
+| Dispatcher | dispatcher@fieldservice.com | dispatch123 |
+| Technician | tech1@fieldservice.com | tech123 |
 
 ## Stack
 
-| Layer | What | Why |
-|-------|------|-----|
-| Frontend | React 18 + Vite + TypeScript | Fast dev server, full TS support |
-| Styling | Vanilla CSS (custom design system) | No framework bloat — full control |
-| Backend | Express 5 + TypeScript | Minimal, well-typed REST API |
-| ORM | Prisma 5.22.0 (pinned) | Type-safe DB queries, easy migrations |
-| Database | PostgreSQL 17 | Relational — assignment/event joins natural |
-| Auth | JWT (jsonwebtoken) + bcryptjs | Stateless, role-based |
-| Testing | Jest + ts-jest | Fast, zero-config TypeScript tests |
-
----
+| Layer | What you used | Why |
+|-------|---------------|-----|
+| Frontend | React + Vite + TypeScript + Tailwind | Fast to build with, already comfortable with it |
+| Backend | Node.js + Express + TypeScript | Same language as frontend, quick to set up |
+| Database | PostgreSQL (Supabase) via Prisma ORM | Prisma makes schema changes and queries fast and type-safe |
+| Hosting | Render (backend + frontend), Supabase (database) | Both free, no card needed |
 
 ## Goal checklist
 
 | # | Goal | Status | Notes |
 |---|------|--------|-------|
-| 1 | Job management (create, view, edit, archive) | ✅ Done | Full CRUD with field validation; archive/restore |
-| 2 | Role-based access (Dispatcher / Technician) | ✅ Done | JWT middleware; DB-level scoping for technicians |
-| 3 | Assign technicians to jobs | ✅ Done | Single + bulk assign; overlap detection |
-| 4 | Scheduling conflict detection | ✅ Done | `overlap.service.ts` — pure, fully tested |
-| 5 | Job status lifecycle | ✅ Done | Strict state machine: UNASSIGNED→ASSIGNED→EN_ROUTE→ON_SITE→COMPLETED |
-| 6 | Parts tracking | ✅ Done | `POST /parts/:jobId` — only when EN_ROUTE or ON_SITE |
-| 7 | Audit timeline | ✅ Done | `JobEvent` append-only log on every state change |
-| 8 | Late job alerts | ✅ Done | `GET /alerts` — detects overdue windows; per-dispatcher dismiss |
-| 9 | Live polling | ✅ Done | `usePolling` hook — 30s (lists), 60s (alerts badge) — tab-aware |
-| 10 | Unit tests | ✅ Done | 36 tests across overlap logic, state machine, JWT auth |
-
----
-
-## Architecture decisions
-
-### Server-side technician scoping
-Technicians can only see their own jobs. This is enforced in the **Prisma `WHERE` clause** — not just the UI — so a tech cannot hit `GET /jobs` with another job's ID and get data. The query filters on `assignments.some({ technicianId: user.id, unassignedAt: null })`.
-
-### Append-only timeline
-`JobEvent` records are never updated or deleted. `timeline.service.ts` is the single write path. This gives a full audit trail for the dispatcher without any event sourcing complexity.
-
-### Soft-delete assignments
-When a technician is unassigned, we set `unassignedAt = now()` rather than deleting the row. This preserves assignment history in the timeline even after reassignment.
-
-### Overlap detection
-`overlap.service.ts` is a pure function (no DB, no side effects) that converts windows to minute ranges and checks for `propStart < exEnd && propEnd > exStart`. It is the most tested module (13 unit tests covering all edge cases).
-
-### State machine
-`ALLOWED_TRANSITIONS` is a plain object record. Any attempt to skip or reverse a step returns HTTP 422. Completion requires a `completionNote` — enforced at the API layer, not just the UI.
-
----
+| 1 | Auth + roles | Done | Login works, dispatcher/technician permissions checked on the server, not just hidden in the UI |
+| 2 | Jobs CRUD | Done | Create, edit, archive, restore all working |
+| 3 | Parts used | Done | Can add parts any time before a job is completed |
+| 4 | Job lifecycle (status flow) | Done | Illegal status jumps get rejected with a reason, completion needs a note + at least one part |
+| 5 | Assignment (no overlaps) | Done | Overlap check works and is safe even if two people click assign at the same time (fixed a race condition here) |
+| 6 | Search/filter/sort/pagination | Done | All happens on the server, not loaded and filtered in the browser |
+| 7 | Bulk assign + CSV export | Partial | Both work, but bulk-assign doesn't yet have the same double-booking protection as single assign — small known gap |
+| 8 | Dashboard | Done | Today's counts, late/unassigned counts, status/tech breakdown, 14-day chart |
+| 9 | Audit timeline | Done | Every status change, assignment, note, and completion is logged and can't be edited or deleted |
+| 10 | Late alerts | Done | Badge + dismiss, and alert comes back if the job is rescheduled and becomes late again |
 
 ## How much time did you actually spend?
 
-~14–16 hours across multiple sessions covering scaffolding, all 7 backend route modules, 8 frontend pages/components, auth, seed, tests, and bug fixes.
-
----
+Around 14-16 hours total — most of it on assignment/overlap logic and fixing bugs found while re-checking my own work (a couple of security and logic issues turned up only on a second pass).
 
 ## What would you do next, with another 12 hours?
 
-1. **Deploy to Railway/Render** with a managed Postgres — give a live URL instead of local setup
-2. **Dashboard charts** — daily job completion graph, technician utilisation heatmap
-3. **WebSocket real-time updates** — replace polling with `socket.io` push events
-4. **Technician mobile view** — responsive PWA with offline job access
-5. **Email/SMS alerts** — notify dispatcher when a job goes late (Twilio / SendGrid)
-6. **Integration tests** — supertest against the Express router with a test DB
-
----
+- Fix the bulk-assign race condition the same way single-assign is fixed, so both are equally safe.
+- Add tests that actually hit the API routes, not just the logic functions on their own.
+- Combine the single-assign and bulk-assign code into one shared function instead of two similar copies.
+- Add a date picker on the CSV export so a dispatcher doesn't have to type the date manually.
 
 ## What are you least happy with in this codebase, and why?
 
-**The `req.params` casting (`as string`)** throughout every route file. Express 5 changed the type of `req.params` to `Record<string, string | string[]>` which means every `req.params.id` requires an explicit cast. The proper fix is a typed `ParamsDictionary` helper or a custom `typedParam()` utility — but it would have added noise without fixing the root Express 5 typing issue, so I went with casts to keep the code readable.
-
-The second thing is the **polling approach** — 30s intervals work but aren't elegant. Server-sent events or WebSockets would give instant updates without hammering the API.
+- The bulk-assign endpoint is a near-copy of single-assign but missing the same concurrency fix — an inconsistent fix always looks worse than no fix at all.
+- Test coverage is strong on pure logic (overlap math, status rules) but weak on the actual routes, so a few of my fixes have no test guarding them from breaking again.
+- The JWT token doesn't expire quickly and there's no way to revoke it early if something goes wrong.
+- Some decisions (like how parts rules work) changed mid-project, and it took a second full read-through of my own code to catch the bugs — I'd rather have caught them the first time.
