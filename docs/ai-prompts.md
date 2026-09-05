@@ -1,7 +1,4 @@
 # AI prompts
-
-Used AI mainly as a debugger and a second pair of eyes, not to generate the whole app blindly. Real prompts, in the order they came up.
-
 ## 1. Deciding how to store time before writing any code
 
 **Prompt:** "I'm storing a job's date and start time separately. Should start time be a full timestamp or just a string like HH:MM?"
